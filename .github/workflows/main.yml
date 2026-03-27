@@ -1,0 +1,75 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  backend-lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Install dependencies
+      run: |
+        cd backend
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    - name: Lint with ruff
+      run: |
+        cd backend
+        ruff check .
+    - name: Run tests
+      run: |
+        cd backend
+        pytest tests/ -v
+
+  frontend-lint-and-build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-corepack: true
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: frontend/package-lock.json
+    - name: Install dependencies
+      run: |
+        cd frontend
+        npm ci
+    - name: Lint
+      run: |
+        cd frontend
+        npm run lint
+    - name: Type check
+      run: |
+        cd frontend
+        npx tsc --noEmit
+    - name: Build
+      run: |
+        cd frontend
+        npm run build
+      env:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+
+  docker-build:
+    needs: [backend-lint-and-test, frontend-lint-and-build]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    - name: Build Backend Image
+      run: |
+        docker build ./backend -t financial-dashboard-backend:latest
+    - name: Build Frontend Image
+      run: |
+        docker build ./frontend -t financial-dashboard-frontend:latest --build-arg NEXT_PUBLIC_API_URL=http://localhost:8000
