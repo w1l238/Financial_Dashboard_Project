@@ -1,0 +1,17 @@
+fastapi
+uvicorn[standard]
+httpx
+python-dotenv
+pydantic-settings
+sqlalchemy
+yfinance
+python-jose[cryptography]
+passlib[bcrypt]
+python-multipart
+slowapi
+cachetools
+ruff
+pytest
+pytest-asyncio
+aiosqlite
+pybind11[global]
