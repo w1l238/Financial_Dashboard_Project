@@ -1,3 +1,11 @@
+###
+# Core API initialization: 
+# - Sets up database & logging
+# - Configures security/timing middleware & Rate Limiting
+# - Mounts Auth, Weather, Stocks, Users, and Admin routers
+###
+
+# Imports
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -12,23 +20,28 @@ from app.routes import weather, stocks, users, auth, admin
 from app.core.config import settings
 from app.core.database import engine, Base
 
-# Initialize database tables
+# DATABASE / LOGGING
+# -------------------
+# Sync database schema (create all tables defined in Base)
 Base.metadata.create_all(bind=engine)
 
-# Logging configuration
+# Global logging config
 logging.basicConfig(
     level=logging.INFO if settings.ENVIRONMENT == "production" else logging.DEBUG,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
-# passlib logs a harmless warning when bcrypt 4.x is installed because it can
-# no longer read the version string.  Suppress it to keep logs clean.
-logging.getLogger("passlib").setLevel(logging.ERROR)
 
-# Initialize Rate Limiter
+# Silence third-party logs (example: passlib version warnings)
+logging.getLogger("passlib").setLevel(logging.ERROR)
+# -----------------
+
+# APP INIT
+# ---------
+# Initialize Rate Limiter using client IP address
 limiter = Limiter(key_func=get_remote_address)
 
-# Initialize FastAPI application
+# Initialize FastAPI app instance
 app = FastAPI(
     title=settings.APP_NAME,
     description="A high-performance aggregation layer for weather and financial data.",
@@ -37,15 +50,17 @@ app = FastAPI(
     redoc_url="/redoc" if settings.ENVIRONMENT != "production" else None,
 )
 
+# Attach limiter to app state
 app.state.limiter = limiter
+
+# Register global rate-limit error handler
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
-# Custom Middleware for Security Headers, Execution Time, and Error Handling.
-# IMPORTANT: app.add_middleware(CORSMiddleware) is called AFTER this decorator
-# so that CORS becomes the outermost layer. In Starlette, the last middleware
-# added is outermost, meaning CORS headers will be applied to all responses
-# including 500s generated here.
+# MIDDLEWARE
+# -----------
+
+# Global interceptor for monitoring request duration and injecting security headers.
 @app.middleware("http")
 async def add_security_headers_and_timing(request: Request, call_next):
     start_time = time.time()
@@ -58,11 +73,11 @@ async def add_security_headers_and_timing(request: Request, call_next):
             content={"detail": "A critical system error occurred. Please try again later."},
         )
 
-    # Timing header
+    # Calc total processing time and append to response headers
     process_time = time.time() - start_time
     response.headers["X-Process-Time"] = str(process_time)
 
-    # Security headers
+    # Standardize security headers to prevent common web vulnerabilities (XSS, Sniffing, etc.)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
@@ -72,11 +87,10 @@ async def add_security_headers_and_timing(request: Request, call_next):
 
     return response
 
-
-# Configure CORS — added LAST so it is the outermost middleware layer.
-# Starlette processes middleware LIFO: the last add_middleware call wraps all
-# others, ensuring CORS headers are injected on every response, including
-# error responses produced by the custom middleware above.
+# Cross-Origin Resource Sharing (CORS)
+# -----
+# Configure CORS
+# Added last in main.py so it wraps all other middleware, making sure headers exist on all exit points.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
@@ -85,7 +99,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register API routes
+# ROUTER REG
+# -----------
+# Mount functional sub-routers to main app instance
 app.include_router(auth.router)
 app.include_router(weather.router)
 app.include_router(stocks.router)
@@ -93,6 +109,10 @@ app.include_router(users.router)
 app.include_router(admin.router)
 
 
+# BASE ENDPOINTS
+# ---------------
+# Root path:
+# - Used for landing confirmation and version checking
 @app.get("/")
 async def root() -> Dict[str, str]:
     """
@@ -107,7 +127,8 @@ async def root() -> Dict[str, str]:
         "status": "operational",
     }
 
-
+# Health Check:
+# - Used to get uptime for things like load balancers or uptime monitors
 @app.get("/health")
 async def health_check() -> Dict[str, str]:
     """
